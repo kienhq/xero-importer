@@ -23,17 +23,24 @@ CLIENT_SECRET=""
 
 ### 1. generate access_token
 
+- Run this command firstly to generate access_token and tenant_id in .env file
+
 ```shell
 make generate_access_token
 ```
 
 ### 2. generate_accounts
 
+- Config the COA_PATH to specify the directory you want to save the coa files
+- After running, list of files will be saved into FILES variable within .env file
+
 ```shell
 make generate_accounts
 ```
 
 ### 3. upload_accounts
+
+- Upload accounts will read files from FILES variable to upload COA to XERO
 
 ```shell
 make upload_accounts
