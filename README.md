@@ -11,6 +11,7 @@ go mod tidy && pip3 install -r requirements.txt
 ```
 
 ## Configuration
+- Create .env file from .env.sample
 - Access to your xero developer dashboard here https://developer.xero.com/app/manage
 - Create a new app and import the following variables to env file
 
