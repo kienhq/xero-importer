@@ -1,0 +1,11 @@
+version: '3.8'
+services:
+  xero_importer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: xero-importer
+    volumes:
+      - ${COA_PATH}:/opt/coa
+    environment:
+      - COA_PATH=/opt/coa

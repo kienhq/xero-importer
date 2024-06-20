@@ -11,9 +11,10 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,10 +28,10 @@ type Account struct {
 }
 
 type Processor struct {
-	pool     chan chan *Account
-	workers  []*Worker
-	wg       *sync.WaitGroup
 	accounts []*Account
+	workers  []*Worker
+	counter  int32
+	doneCh   chan struct{}
 }
 
 type Worker struct {
@@ -38,16 +39,16 @@ type Worker struct {
 	tenantId    string
 	client      *http.Client
 	accountCh   chan *Account
-	wg          *sync.WaitGroup
+	processor   *Processor
 }
 
-func NewWorker(accessToken string, tenantId string, client *http.Client, wg *sync.WaitGroup) *Worker {
+func NewWorker(accessToken string, tenantId string, client *http.Client, processor *Processor) *Worker {
 	return &Worker{
 		accessToken: accessToken,
 		tenantId:    tenantId,
 		client:      client,
 		accountCh:   make(chan *Account, 1),
-		wg:          wg,
+		processor:   processor,
 	}
 }
 
@@ -61,28 +62,31 @@ func (w *Worker) Start() {
 }
 
 func NewProcessor(accessToken, tenantId string, numberOfWorker int, accounts []*Account) *Processor {
-	wg := new(sync.WaitGroup)
-	wg.Add(len(accounts))
-	workers := make([]*Worker, numberOfWorker)
-	for i := 0; i < numberOfWorker; i++ {
-		workers[i] = NewWorker(accessToken, tenantId, http.DefaultClient, wg)
-	}
-	return &Processor{
-		workers:  workers,
-		wg:       wg,
+	p := &Processor{
 		accounts: accounts,
+		doneCh:   make(chan struct{}),
+		workers:  make([]*Worker, numberOfWorker),
 	}
+	for i := 0; i < numberOfWorker; i++ {
+		p.workers[i] = NewWorker(accessToken, tenantId, http.DefaultClient, p)
+	}
+	return p
 }
 
 func (p *Processor) Start() {
 	for _, worker := range p.workers {
 		go worker.Start()
 	}
-	p.processAccounts(p.accounts)
-}
-
-func (p *Processor) Wait() {
-	p.wg.Wait()
+	go p.processAccounts(p.accounts)
+	for {
+		select {
+		case <-p.doneCh:
+			atomic.AddInt32(&p.counter, 1)
+			if atomic.LoadInt32(&p.counter) >= int32(len(p.accounts)) {
+				return
+			}
+		}
+	}
 }
 
 func (p *Processor) processAccounts(accounts []*Account) {
@@ -110,11 +114,15 @@ func (w *Worker) ProcessAccount(account *Account, count int) {
 		err := w.uploadAccount(account)
 		if err != nil {
 			log.Println(err)
-			time.Sleep(3 * time.Second)
+			time.Sleep(5 * time.Second)
 			w.ProcessAccount(account, count+1)
+		} else {
+			log.Println(fmt.Sprintf("finish processing account %s (uploaded: %d)", account.Code, atomic.LoadInt32(&w.processor.counter)))
 		}
+	} else {
+		log.Println(fmt.Sprintf("cannot process account %s (uploaded: %d)", account.Code, atomic.LoadInt32(&w.processor.counter)))
 	}
-	w.wg.Done()
+	w.processor.doneCh <- struct{}{}
 }
 
 func (w *Worker) uploadAccount(account *Account) error {
@@ -221,7 +229,7 @@ func generateCOA(numberOfFile int, path string, initNumber, size int) {
 	counter := 0
 	var files []string
 	for n < numberOfFile {
-		filename := fmt.Sprintf("%s/coa%d.csv", path, n)
+		filename := filepath.Join(path, fmt.Sprintf("coa%d.csv", n))
 		f, err := os.Create(filename)
 		if err != nil {
 			panic(err)
@@ -264,11 +272,8 @@ func uploadAccounts(accessToken, tenantId string, files []string) {
 		}
 	}
 
-	accounts = accounts[len(accounts)-496:]
-
 	processor := NewProcessor(accessToken, tenantId, 2, accounts)
-	go processor.Start()
-	processor.Wait()
+	processor.Start()
 }
 
 func main() {
@@ -276,6 +281,10 @@ func main() {
 	env, err = godotenv.Read()
 	if err != nil {
 		log.Fatal("Error loading .env file")
+	}
+
+	if os.Getenv("COA_PATH") != "" {
+		env["COA_PATH"] = os.Getenv("COA_PATH")
 	}
 
 	accessToken := env["ACCESS_TOKEN"]
